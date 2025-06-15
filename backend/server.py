@@ -283,6 +283,7 @@ async def create_payment_intent(checkout_data: StripeCheckout, current_user: Use
         intent = stripe.PaymentIntent.create(
             amount=int(total_amount * 100),  # Stripe uses cents
             currency='usd',
+            payment_method_types=['card'],
             metadata={
                 'user_id': current_user.id,
                 'user_email': current_user.email,

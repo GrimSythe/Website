@@ -264,11 +264,129 @@ const HomePage = ({ setCurrentPage }) => {
   );
 };
 
+// Stripe Checkout Form Component
+const CheckoutForm = ({ cart, onSuccess, onCancel }) => {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [processing, setProcessing] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setProcessing(true);
+    setError('');
+
+    if (!stripe || !elements) {
+      setError('Stripe not loaded');
+      setProcessing(false);
+      return;
+    }
+
+    try {
+      // Create payment intent
+      const { data } = await axios.post(`${API}/create-payment-intent`, {
+        items: cart.map(item => ({ product_id: item.id, quantity: 1 }))
+      });
+
+      // Confirm payment
+      const { error: stripeError, paymentIntent } = await stripe.confirmCardPayment(
+        data.client_secret,
+        {
+          payment_method: {
+            card: elements.getElement(CardElement),
+          }
+        }
+      );
+
+      if (stripeError) {
+        setError(stripeError.message);
+      } else if (paymentIntent.status === 'succeeded') {
+        // Confirm with backend
+        await axios.post(`${API}/confirm-payment?payment_intent_id=${paymentIntent.id}`, 
+          cart.map(item => ({ product_id: item.id, quantity: 1 }))
+        );
+        onSuccess();
+      }
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Payment failed');
+    }
+    
+    setProcessing(false);
+  };
+
+  const cardElementOptions = {
+    style: {
+      base: {
+        fontSize: '16px',
+        color: '#6b7280',
+        '::placeholder': {
+          color: '#9ca3af',
+        },
+      },
+    },
+  };
+
+  return (
+    <div className="bg-white/90 backdrop-blur-sm rounded-3xl p-8 shadow-xl border border-white/50">
+      <h3 className="text-2xl font-bold text-purple-800 mb-6">✨ Complete Your Magical Purchase</h3>
+      
+      <div className="mb-6">
+        <h4 className="text-lg font-semibold text-gray-700 mb-4">Order Summary:</h4>
+        {cart.map((item, index) => (
+          <div key={index} className="flex justify-between items-center py-2 border-b border-gray-200">
+            <span className="text-gray-700">{item.name}</span>
+            <span className="text-purple-600 font-semibold">${item.price}</span>
+          </div>
+        ))}
+        <div className="flex justify-between items-center py-3 text-lg font-bold text-purple-800">
+          <span>Total:</span>
+          <span>${cart.reduce((sum, item) => sum + item.price, 0).toFixed(2)}</span>
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-xl mb-6">
+          {error}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div>
+          <label className="block text-gray-700 text-sm font-semibold mb-2">
+            Card Details
+          </label>
+          <div className="p-4 border border-gray-300 rounded-xl bg-white">
+            <CardElement options={cardElementOptions} />
+          </div>
+        </div>
+
+        <div className="flex space-x-4">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="flex-1 bg-gray-500 hover:bg-gray-600 text-white py-3 rounded-xl font-semibold transition-all"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!stripe || processing}
+            className="flex-1 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white py-3 rounded-xl font-semibold transition-all disabled:opacity-50"
+          >
+            {processing ? 'Processing...' : `Pay $${cart.reduce((sum, item) => sum + item.price, 0).toFixed(2)}`}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
 // Products Page Component
 const ProductsPage = () => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [cart, setCart] = useState([]);
+  const [showCheckout, setShowCheckout] = useState(false);
   const { user } = useAuth();
 
   useEffect(() => {
@@ -298,7 +416,11 @@ const ProductsPage = () => {
     alert(`${product.name} added to cart!`);
   };
 
-  const checkout = async () => {
+  const removeFromCart = (index) => {
+    setCart(cart.filter((_, i) => i !== index));
+  };
+
+  const checkout = () => {
     if (!user) {
       alert('Please login to checkout!');
       return;
@@ -307,19 +429,13 @@ const ProductsPage = () => {
       alert('Your cart is empty!');
       return;
     }
+    setShowCheckout(true);
+  };
 
-    try {
-      const orderData = {
-        items: cart.map(item => ({ product_id: item.id, quantity: 1 }))
-      };
-      
-      await axios.post(`${API}/orders`, orderData);
-      alert('Order placed successfully! Check your account dashboard for details.');
-      setCart([]);
-    } catch (error) {
-      console.error('Error creating order:', error);
-      alert('Error placing order. Please try again.');
-    }
+  const onPaymentSuccess = () => {
+    alert('🎉 Payment successful! Your magical overlays have been ordered!');
+    setCart([]);
+    setShowCheckout(false);
   };
 
   if (loading) return (
@@ -327,6 +443,22 @@ const ProductsPage = () => {
       <div className="text-2xl text-purple-600">Loading magical overlays... ✨</div>
     </div>
   );
+
+  if (showCheckout) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-100 via-pink-50 to-amber-50 py-12">
+        <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8">
+          <Elements stripe={stripePromise}>
+            <CheckoutForm 
+              cart={cart} 
+              onSuccess={onPaymentSuccess}
+              onCancel={() => setShowCheckout(false)}
+            />
+          </Elements>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 via-pink-50 to-amber-50 py-12">
@@ -341,12 +473,31 @@ const ProductsPage = () => {
           </p>
           {cart.length > 0 && (
             <div className="mt-6 bg-white/80 backdrop-blur-sm rounded-2xl p-4 max-w-md mx-auto">
-              <p className="text-lg font-semibold text-purple-800">Cart: {cart.length} items</p>
+              <p className="text-lg font-semibold text-purple-800">🛒 Cart: {cart.length} items</p>
+              <div className="mt-2 space-y-1">
+                {cart.map((item, index) => (
+                  <div key={index} className="flex justify-between items-center text-sm">
+                    <span className="text-gray-700">{item.name}</span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-purple-600">${item.price}</span>
+                      <button
+                        onClick={() => removeFromCart(index)}
+                        className="text-red-500 hover:text-red-700 text-xs"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <div className="border-t pt-2 font-semibold">
+                  Total: ${cart.reduce((sum, item) => sum + item.price, 0).toFixed(2)}
+                </div>
+              </div>
               <button
                 onClick={checkout}
-                className="mt-2 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white px-6 py-2 rounded-full font-semibold transition-all"
+                className="mt-3 w-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white px-6 py-2 rounded-full font-semibold transition-all"
               >
-                Checkout ${cart.reduce((sum, item) => sum + item.price, 0).toFixed(2)}
+                💳 Secure Checkout
               </button>
             </div>
           )}

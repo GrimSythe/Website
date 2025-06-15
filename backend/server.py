@@ -267,6 +267,84 @@ async def get_user_suggestions(current_user: User = Depends(get_current_user)):
     suggestions = await db.product_suggestions.find({"user_id": current_user.id}).to_list(1000)
     return [ProductSuggestion(**suggestion) for suggestion in suggestions]
 
+# Stripe Payment Routes
+@api_router.post("/create-payment-intent")
+async def create_payment_intent(checkout_data: StripeCheckout, current_user: User = Depends(get_current_user)):
+    try:
+        # Calculate total amount
+        total_amount = 0
+        for item in checkout_data.items:
+            product = await db.products.find_one({"id": item.product_id})
+            if not product:
+                raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
+            total_amount += product["price"] * item.quantity
+        
+        # Create payment intent with Stripe
+        intent = stripe.PaymentIntent.create(
+            amount=int(total_amount * 100),  # Stripe uses cents
+            currency='usd',
+            metadata={
+                'user_id': current_user.id,
+                'user_email': current_user.email,
+                'items': str(len(checkout_data.items))
+            }
+        )
+        
+        return {
+            "client_secret": intent.client_secret,
+            "amount": total_amount,
+            "payment_intent_id": intent.id
+        }
+    except stripe.error.StripeError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+@api_router.post("/confirm-payment")
+async def confirm_payment(payment_intent_id: str, items: List[CartItem], current_user: User = Depends(get_current_user)):
+    try:
+        # Verify payment with Stripe
+        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+        
+        if intent.status != 'succeeded':
+            raise HTTPException(status_code=400, detail="Payment not successful")
+        
+        # Calculate total amount for verification
+        total_amount = 0
+        for item in items:
+            product = await db.products.find_one({"id": item.product_id})
+            if not product:
+                raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
+            total_amount += product["price"] * item.quantity
+        
+        # Create order record
+        order = Order(
+            user_id=current_user.id,
+            items=items,
+            total_amount=total_amount,
+            status="paid",
+            stripe_payment_intent_id=payment_intent_id
+        )
+        
+        await db.orders.insert_one(order.dict())
+        
+        return {
+            "success": True,
+            "order_id": order.id,
+            "message": "Payment successful! Your order has been placed."
+        }
+        
+    except stripe.error.StripeError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+@api_router.get("/stripe-config")
+async def get_stripe_config():
+    return {
+        "publishable_key": os.environ.get("STRIPE_PUBLISHABLE_KEY")
+    }
+
 # Initialize sample data
 @api_router.post("/init-data")
 async def initialize_sample_data():

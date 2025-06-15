@@ -144,6 +144,16 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise credentials_exception
     return User(**user)
 
+# Root route
+@api_router.get("/")
+async def root():
+    return {"message": "Welcome to Wonderland Stores API! ✨🍄"}
+
+# Health check route
+@api_router.get("/health")
+async def health_check():
+    return {"status": "healthy", "message": "Wonderland API is running!"}
+
 # Authentication Routes
 @api_router.post("/auth/register", response_model=UserResponse)
 async def register_user(user_data: UserCreate):
